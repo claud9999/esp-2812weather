@@ -1,0 +1,3 @@
+source "/Users/cdknight/esp-idf/components/bootloader/Kconfig.projbuild"
+source "/Users/cdknight/esp-idf/components/esptool_py/Kconfig.projbuild"
+source "/Users/cdknight/esp-idf/components/partition_table/Kconfig.projbuild"
