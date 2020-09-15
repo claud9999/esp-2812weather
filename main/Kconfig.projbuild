@@ -1,23 +1,15 @@
-menu "Example Configuration"
+menu "Project Configuration"
 
-    config BLINK_SLOWEST
-        int "Blink slowest speed (ms)"
-        range 0 1000
-        default 500
+    config BROKER_URL
+        string "Broker URL"
+        default "mqtt://mqtt.lan"
         help
-            The slowest blink speed in the speed range.
-
-    config BLINK_FASTEST
-        int "Blink fastest speed (ms)"
-        range 0 1000
-        default 5
-        help
-            The fastest blink speed in the speed range.
+            URL of the broker to connect to
 
     config BLINK_GPIO
         int "Blink GPIO number"
         range 0 34
-        default 5
+        default 2
         help
             GPIO number (IOxx) to blink on and off.
 
@@ -25,22 +17,27 @@ menu "Example Configuration"
 
             GPIOs 35-39 are input-only so cannot be used as outputs.
 
-    config ESP_WIFI_SSID
+    config WIFI_SSID
         string "WiFi SSID"
-        default "myssid"
+        default "hotcat"
         help
             SSID (network name) for the example to connect to.
 
-    config ESP_WIFI_PASSWORD
+    config WIFI_PASSWORD
         string "WiFi Password"
         default "mypassword"
         help
             WiFi password (WPA or WPA2) for the example to use.
 
-    config ESP_MAXIMUM_RETRY
-        int "Maximum retry"
+    config RMT_TX_GPIO
+        int "RMT TX GPIO"
         default 5
         help
-            Set the Maximum retry to avoid station reconnecting to the AP unlimited when the AP is really inexistent.
+            Set the GPIO number used for transmitting the RMT signal.
 
+    config STRIP_LED_NUMBER
+        int "Number of LEDS in a strip"
+        default 300
+        help
+            A single RGB strip contains several LEDs.
 endmenu

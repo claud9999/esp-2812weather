@@ -1,5 +1,0 @@
-source "/Users/cdknight/esp-idf/components/efuse/Kconfig"
-source "/Users/cdknight/esp-idf/components/esp32/Kconfig"
-source "/Users/cdknight/esp-idf/components/esp_common/Kconfig"
-source "/Users/cdknight/esp-idf/components/log/Kconfig"
-source "/Users/cdknight/esp-idf/components/spi_flash/Kconfig"
