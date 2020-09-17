@@ -6,6 +6,24 @@ menu "Project Configuration"
         help
             URL of the broker to connect to
 
+    config MQTT_CMD_BASE
+        string "MQTT Command topic base"
+        default "cmd/led_string"
+        help
+            The base path for command topics.
+
+    config MQTT_TLM_BASE
+        string "Telemetry topic base"
+        default "tlm/led_string"
+        help
+            The base path for telemetry topics.
+
+    config MQTT_HEARTBEAT_SEC
+        int "seconds between heartbeat"
+        default 10
+        help
+            Heartbeats will be published every N seconds.
+
     config BLINK_GPIO
         int "Blink GPIO number"
         range 0 34

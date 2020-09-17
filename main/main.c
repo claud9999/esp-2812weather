@@ -1,3 +1,4 @@
+/* HSV->RGB code adapted from https://www.vagrearg.org/content/hsvrgb */
 #include <stdio.h>
 #include <stdint.h>
 #include <stddef.h>
@@ -45,53 +46,137 @@ static const char *TAG = "2812weather";
 
 bool mqtt_conn = false;
 
-#define RMT_TX_CHANNEL RMT_CHANNEL_0
+#include <stdint.h>
 
-#define CHASE_SPEED_MS (10)
+#define HSV_HUE_SEXTANT     256
+#define HSV_HUE_STEPS       (6 * HSV_HUE_SEXTANT)
 
-void led_strip_hsv2rgb(uint32_t h, uint32_t s, uint32_t v, uint32_t *r, uint32_t *g, uint32_t *b)
-{
-    h %= 360; // h -> [0,360]
-    uint32_t rgb_max = v * 2.55f;
-    uint32_t rgb_min = rgb_max * (100 - s) / 100.0f;
+#define HSV_HUE_MIN     0
+#define HSV_HUE_MAX     (HSV_HUE_STEPS - 1)
+#define HSV_SAT_MIN     0
+#define HSV_SAT_MAX     255
+#define HSV_VAL_MIN     0
+#define HSV_VAL_MAX     255
 
-    uint32_t i = h / 60;
-    uint32_t diff = h % 60;
+#define HSV_MONOCHROMATIC_TEST(s,v,r,g,b) \
+    do { \
+        if(!(s)) { \
+             *(r) = *(g) = *(b) = (v); \
+            return; \
+        } \
+    } while(0)
 
-    // RGB adjustment amount by hue
-    uint32_t rgb_adj = (rgb_max - rgb_min) * diff / 60;
+#define HSV_SEXTANT_TEST(sextant) \
+    do { \
+        if((sextant) > 5) { \
+            (sextant) = 5; \
+        } \
+    } while(0)
 
-    switch (i) {
-    case 0:
-        *r = rgb_max;
-        *g = rgb_min + rgb_adj;
-        *b = rgb_min;
-        break;
-    case 1:
-        *r = rgb_max - rgb_adj;
-        *g = rgb_max;
-        *b = rgb_min;
-        break;
-    case 2:
-        *r = rgb_min;
-        *g = rgb_max;
-        *b = rgb_min + rgb_adj;
-        break;
-    case 3:
-        *r = rgb_min;
-        *g = rgb_max - rgb_adj;
-        *b = rgb_max;
-        break;
-    case 4:
-        *r = rgb_min + rgb_adj;
-        *g = rgb_min;
-        *b = rgb_max;
-        break;
-    default:
-        *r = rgb_max;
-        *g = rgb_min;
-        *b = rgb_max - rgb_adj;
-        break;
+/*
+ * Pointer swapping:
+ *  sext.   r g b   r<>b    g<>b    r <> g  result
+ *  0 0 0   v u c           !u v c  u v c
+ *  0 0 1   d v c               d v c
+ *  0 1 0   c v u   u v c           u v c
+ *  0 1 1   c d v   v d c       d v c   d v c
+ *  1 0 0   u c v       u v c       u v c
+ *  1 0 1   v c d       v d c   d v c   d v c
+ *
+ * if(sextant & 2)
+ *  r <-> b
+ *
+ * if(sextant & 4)
+ *  g <-> b
+ *
+ * if(!(sextant & 6) {
+ *  if(!(sextant & 1))
+ *      r <-> g
+ * } else {
+ *  if(sextant & 1)
+ *      r <-> g
+ * }
+ */
+#define HSV_SWAPPTR(a,b)    do { uint8_t *tmp = (a); (a) = (b); (b) = tmp; } while(0)
+#define HSV_POINTER_SWAP(sextant,r,g,b) \
+    do { \
+        if((sextant) & 2) { \
+            HSV_SWAPPTR((r), (b)); \
+        } \
+        if((sextant) & 4) { \
+            HSV_SWAPPTR((g), (b)); \
+        } \
+        if(!((sextant) & 6)) { \
+            if(!((sextant) & 1)) { \
+                HSV_SWAPPTR((r), (g)); \
+            } \
+        } else { \
+            if((sextant) & 1) { \
+                HSV_SWAPPTR((r), (g)); \
+            } \
+        } \
+    } while(0)
+
+// hue is 0..(6 * 256 - 1) which each of the six sextants being 0..255
+void fast_hsv2rgb_8bit(uint16_t h, uint8_t s, uint8_t v, uint8_t *r, uint8_t *g, uint8_t *b) {
+    HSV_MONOCHROMATIC_TEST(s, v, r, g, b);  // Exit with grayscale if s == 0
+
+    uint8_t sextant = h >> 8;
+
+    HSV_SEXTANT_TEST(sextant);      // Optional: Limit hue sextants to defined space
+
+    HSV_POINTER_SWAP(sextant, r, g, b); // Swap pointers depending which sextant we are in
+
+    *g = v;     // Top level
+
+    // Perform actual calculations
+    uint8_t bb;
+    uint16_t ww;
+
+    /*
+     * Bottom level: v * (1.0 - s)
+     * --> (v * (255 - s) + error_corr) / 256
+     */
+    bb = ~s;
+    ww = v * bb;
+    ww += 1;        // Error correction
+    ww += ww >> 8;      // Error correction
+    *b = ww >> 8;
+
+    uint8_t h_fraction = h & 0xff;  // 0...255
+
+    if(!(sextant & 1)) {
+        // *r = ...slope_up...;
+        /*
+         * Slope up: v * (1.0 - s * (1.0 - h))
+         * --> (v * (255 - (s * (256 - h) + error_corr1) / 256) + error_corr2) / 256
+         */
+        ww = !h_fraction ? ((uint16_t)s << 8) : (s * (uint8_t)(-h_fraction));
+        ww += ww >> 8;      // Error correction 1
+        bb = ww >> 8;
+        bb = ~bb;
+        ww = v * bb;
+        ww += v >> 1;       // Error correction 2
+        *r = ww >> 8;
+    } else {
+        // *r = ...slope_down...;
+        /*
+         * Slope down: v * (1.0 - s * h)
+         * --> (v * (255 - (s * h + error_corr1) / 256) + error_corr2) / 256
+         */
+        ww = s * h_fraction;
+        ww += ww >> 8;      // Error correction 1
+        bb = ww >> 8;
+        bb = ~bb;
+        ww = v * bb;
+        ww += v >> 1;       // Error correction 2
+        *r = ww >> 8;
+
+        /*
+         * A perfect match for h_fraction == 0 implies:
+         *  *r = (ww >> 8) + (h_fraction ? 0 : 1)
+         * However, this is an extra calculation that may not be required.
+         */
     }
 }
 
@@ -104,7 +189,7 @@ static void on_wifi_disconnect(void *arg, esp_event_base_t event_base, int32_t e
 static void on_got_ip(void *arg, esp_event_base_t event_base, int32_t event_id, void *event_data) {
     static esp_ip4_addr_t ip_addr;
 
-    ESP_LOGI(TAG, "Got IP event!");
+    ESP_LOGI(TAG, "Got event!");
     ip_event_got_ip_t *event = (ip_event_got_ip_t *)event_data;
     memcpy(&ip_addr, &event->ip_info.ip, sizeof(ip_addr));
 
@@ -157,20 +242,33 @@ static void stop(void) {
 }
 
 #define SUB_TOPIC_WILDCARD "cmd/2812weather/+"
-#define AVAIL_TOPIC "tlm/2812weather/avail"
-#define HEARTBEAT_TOPIC "tlm/2812weather/heartbeat"
+
+esp_mqtt_client_handle_t client;
+
+led_strip_t *strip = NULL;
+
+static void set_color(uint32_t r, uint32_t g, uint32_t b) {
+    if (!strip) return;
+
+    ESP_LOGI(TAG, "setting color %d %d %d", r, g, b);
+    ESP_ERROR_CHECK(strip->clear(strip, 100));
+
+    for (int i = 0; i < CONFIG_STRIP_LED_NUMBER; i++) ESP_ERROR_CHECK(strip->set_pixel(strip, i, r, g, b));
+
+    ESP_ERROR_CHECK(strip->refresh(strip, 100));
+}
 
 static void mqtt_event_handler(void *handler_args, esp_event_base_t base, int32_t event_id, void *event_data) {
     ESP_LOGD(TAG, "Event dispatched from event loop base=%s, event_id=%d", base, event_id);
     esp_mqtt_event_handle_t event = (esp_mqtt_event_handle_t)event_data;
-    esp_mqtt_client_handle_t client = event->client;
+    client = event->client;
     int msg_id;
 
     switch (event->event_id) {
         case MQTT_EVENT_CONNECTED:
             ESP_LOGI(TAG, "MQTT_EVENT_CONNECTED");
-            msg_id = esp_mqtt_client_subscribe(client, SUB_TOPIC_WILDCARD, 0);
-	    esp_mqtt_client_publish(client, AVAIL_TOPIC, "ON", 0, 1, 0);
+            msg_id = esp_mqtt_client_subscribe(client, CONFIG_MQTT_CMD_BASE "/+", 0);
+	    esp_mqtt_client_publish(client, CONFIG_MQTT_TLM_BASE "/avail", "ON", 0, 1, 0);
             ESP_LOGI(TAG, "sent subscribe successful, msg_id=%d", msg_id);
             mqtt_conn = true;
             break;
@@ -189,8 +287,28 @@ static void mqtt_event_handler(void *handler_args, esp_event_base_t base, int32_
             break;
         case MQTT_EVENT_DATA:
             ESP_LOGI(TAG, "MQTT_EVENT_DATA");
-            ESP_LOGI(TAG, "TOPIC=%.*s\r\n", event->topic_len, event->topic);
-            ESP_LOGI(TAG, "DATA=%.*s\r\n", event->data_len, event->data);
+            event->data[event->data_len] = '\0';
+            ESP_LOGI(TAG, "TOPIC=%.*s", event->topic_len, event->topic);
+            ESP_LOGI(TAG, "DATA=%.*s", event->data_len, event->data);
+            if(!strncmp(event->topic, CONFIG_MQTT_CMD_BASE "/rgb", strlen(CONFIG_MQTT_CMD_BASE "/rgb")))
+            {
+                char *end;
+                uint32_t r = strtol(event->data, &end, 10);
+                uint32_t g = strtol(end + 1, &end, 10);
+                uint32_t b = strtol(end + 1, &end, 10);
+                set_color(r, g, b);
+            }
+            if(!strncmp(event->topic, CONFIG_MQTT_CMD_BASE "/hsv", strlen(CONFIG_MQTT_CMD_BASE "/rgb")))
+            {
+                event->data[event->data_len] = '\0';
+                char *end;
+                uint32_t h = strtol(event->data, &end, 10);
+                uint32_t s = strtol(end + 1, &end, 10);
+                uint32_t v = strtol(end + 1, &end, 10);
+                uint8_t r, g, b;
+                fast_hsv2rgb_8bit(h, s, v, &r, &g, &b);
+                set_color(r, g, b);
+            }
             break;
         case MQTT_EVENT_ERROR:
             ESP_LOGI(TAG, "MQTT_EVENT_ERROR");
@@ -201,8 +319,6 @@ static void mqtt_event_handler(void *handler_args, esp_event_base_t base, int32_
     }
 }
 
-esp_mqtt_client_handle_t client;
-
 static void mqtt_app_start(void) {
     esp_mqtt_client_config_t mqtt_cfg = { .uri = CONFIG_BROKER_URL, };
     esp_mqtt_client_handle_t client = esp_mqtt_client_init(&mqtt_cfg);
@@ -210,30 +326,34 @@ static void mqtt_app_start(void) {
     esp_mqtt_client_start(client);
 }
 
-void app_main(void) {
-    uint32_t red = 0;
-    uint32_t green = 0;
-    uint32_t blue = 0;
-    uint16_t hue = 0;
-    uint16_t start_rgb = 0;
-
-    rmt_config_t config = RMT_DEFAULT_CONFIG_TX(CONFIG_RMT_TX_GPIO, RMT_TX_CHANNEL);
-    // set counter clock to 40MHz
-    config.clk_div = 2;
-
-    ESP_ERROR_CHECK(rmt_config(&config));
-    ESP_ERROR_CHECK(rmt_driver_install(config.channel, 0, 0));
-
-    // install ws2812 driver
-    led_strip_config_t strip_config = LED_STRIP_DEFAULT_CONFIG(CONFIG_STRIP_LED_NUMBER, (led_strip_dev_t)config.channel);
-    led_strip_t *strip = led_strip_new_rmt_ws2812(&strip_config);
-    if (!strip) {
-        ESP_LOGE(TAG, "install WS2812 driver failed");
-    }
+static void blink_task(void *pvParameters)
+{
     gpio_pad_select_gpio(CONFIG_BLINK_GPIO);
     gpio_set_direction(CONFIG_BLINK_GPIO, GPIO_MODE_OUTPUT);
     gpio_set_level(CONFIG_BLINK_GPIO, 0);
 
+    while (true) {
+        gpio_set_level(CONFIG_BLINK_GPIO, 1);
+        vTaskDelay(500 / portTICK_PERIOD_MS);
+        gpio_set_level(CONFIG_BLINK_GPIO, 0);
+        vTaskDelay(500 / portTICK_PERIOD_MS);
+    }
+}
+
+static void animate_task(void *pvParameters) {
+    ESP_ERROR_CHECK(strip->clear(strip, 100));
+    uint8_t b = 0;
+    while (true) {
+        for (int j = 0; j < CONFIG_STRIP_LED_NUMBER; j++) {
+            ESP_ERROR_CHECK(strip->set_pixel(strip, j, b, b, b));
+        }
+        ESP_ERROR_CHECK(strip->refresh(strip, 100));
+        vTaskDelay(pdMS_TO_TICKS(100));
+        b += 1;
+    }
+}
+
+void app_main(void) {
     ESP_LOGI(TAG, "[APP] Startup..");
     ESP_LOGI(TAG, "[APP] Free memory: %d bytes", esp_get_free_heap_size());
     ESP_LOGI(TAG, "[APP] IDF version: %s", esp_get_idf_version());
@@ -255,35 +375,33 @@ void app_main(void) {
 
     mqtt_app_start();
 
-    int count = 0;
-    // Clear LED strip (turn off all LEDs)
-    ESP_ERROR_CHECK(strip->clear(strip, 100));
-    // Show simple rainbow chasing pattern
-    ESP_LOGI(TAG, "LED Rainbow Chase Start");
-    while (true) {
-        for (int i = 0; i < 3; i++) {
-            for (int j = i; j < CONFIG_STRIP_LED_NUMBER; j += 3) {
-                // Build RGB values
-                hue = j * 360 / CONFIG_STRIP_LED_NUMBER + start_rgb;
-                led_strip_hsv2rgb(hue, 100, 100, &red, &green, &blue);
-                // Write RGB values to strip driver
-                ESP_ERROR_CHECK(strip->set_pixel(strip, j, red, green, blue));
-            }
-            // Flush RGB values to LEDs
-            ESP_ERROR_CHECK(strip->refresh(strip, 100));
-            vTaskDelay(pdMS_TO_TICKS(CHASE_SPEED_MS));
-            strip->clear(strip, 50);
-            vTaskDelay(pdMS_TO_TICKS(CHASE_SPEED_MS));
-        }
-        start_rgb += 60;
+    rmt_config_t config = RMT_DEFAULT_CONFIG_TX(CONFIG_RMT_TX_GPIO, RMT_CHANNEL_0);
+    // set counter clock to 40MHz
+    config.clk_div = 2;
 
-        gpio_set_level(CONFIG_BLINK_GPIO, 1);
-        vTaskDelay(1000 / portTICK_PERIOD_MS);
-        gpio_set_level(CONFIG_BLINK_GPIO, 0);
-        vTaskDelay(1000 / portTICK_PERIOD_MS);
-        if(count++ > 100) {
-	    if(mqtt_conn) esp_mqtt_client_publish(client, HEARTBEAT_TOPIC, "beat", 0, 1, 0);
-            count = 0;
+    ESP_ERROR_CHECK(rmt_config(&config));
+    ESP_ERROR_CHECK(rmt_driver_install(config.channel, 0, 0));
+
+    led_strip_config_t strip_config = LED_STRIP_DEFAULT_CONFIG(CONFIG_STRIP_LED_NUMBER, (led_strip_dev_t)config.channel);
+    strip = led_strip_new_rmt_ws2812(&strip_config);
+    if (!strip) ESP_LOGE(TAG, "install WS2812 driver failed");
+    else ESP_LOGI(TAG, "WS2812 driver installed");
+
+    if(xTaskCreate(blink_task, "blink_task", 1024, NULL, 5, NULL) == pdPASS)
+        ESP_LOGI(TAG, "[APP] Created blink task.");
+    else ESP_LOGE(TAG, "[APP] Unable to create blink task.");
+/*    if(xTaskCreate(animate_task, "animate_task", 8192, NULL, 5, NULL) == pdPASS)
+        ESP_LOGI(TAG, "[APP] Created animate task.");
+    else ESP_LOGE(TAG, "[APP] Unable to create animate task.");
+    */
+
+    while (true) {
+        if(mqtt_conn) {
+            ESP_LOGI(TAG, "Sending heartbeat.");
+            esp_mqtt_client_publish(client, CONFIG_MQTT_TLM_BASE "/heartbeat", "beat", 0, 1, 0);
         }
+
+        ESP_LOGI(TAG, "Sleeping 5s.");
+        vTaskDelay(5000 / portTICK_PERIOD_MS);
     }
 }
