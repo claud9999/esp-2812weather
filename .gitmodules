@@ -1,0 +1,3 @@
+[submodule "FastLED-idf"]
+	path = FastLED-idf
+	url = git@github.com:bbulkow/FastLED-idf.git
