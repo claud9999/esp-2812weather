@@ -47,14 +47,14 @@ menu "Project Configuration"
         help
             WiFi password (WPA or WPA2) for the example to use.
 
-    config RMT_TX_GPIO
-        int "RMT TX GPIO"
+    config LED_STRIP_GPIO
+        int "The GPIO for controlling the LED strip"
         default 5
         help
-            Set the GPIO number used for transmitting the RMT signal.
+            Set the GPIO number used for controlling the LED strip.
 
-    config STRIP_LED_NUMBER
-        int "Number of LEDS in a strip"
+    config LED_STRIP_COUNT
+        int "Number of LEDS in the strip"
         default 300
         help
             A single RGB strip contains several LEDs.
