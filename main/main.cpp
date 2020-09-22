@@ -171,31 +171,33 @@ static void mqtt_app_start(void) {
     esp_mqtt_client_start(client);
 }
 
-static void animate_task(void *pvParameters) {
-    CRGB leds[CONFIG_LED_STRIP_COUNT];
+CRGB leds[CONFIG_LED_STRIP_COUNT];
 
-    FastLED.addLeds<WS2812, CONFIG_LED_STRIP_GPIO>(leds, CONFIG_LED_STRIP_COUNT);
-
-    while (true) {
-        for(int i = 0; i < 10; i++)
-            leds[random() % CONFIG_LED_STRIP_COUNT] = CHSV(180, 200, 32 + random() % 150);
-        yield();
-        FastLED.show();
-        delay(300);
-    }
+static void animate_cb(void *param) {
+    fade_video(leds, CONFIG_LED_STRIP_COUNT, 40);
+    leds[random() % CONFIG_LED_STRIP_COUNT] = CHSV(180, 200, 128 + random() % 128);
+    FastLED.show();
 }
 
-static void blink_task(void *pvParameters) {
-    gpio_pad_select_gpio((gpio_num_t)CONFIG_BLINK_GPIO);
-    gpio_set_direction((gpio_num_t)CONFIG_BLINK_GPIO, GPIO_MODE_OUTPUT);
-    gpio_set_level((gpio_num_t)CONFIG_BLINK_GPIO, 0);
+static void animate_task(void *pvParameters) {
+    WS2812FX w;
+    FastLED.addLeds<WS2812, CONFIG_LED_STRIP_GPIO>(leds, CONFIG_LED_STRIP_COUNT);
+    FastLED.setMaxPowerInVoltsAndMilliamps(12,15000); // 12v, 15a
 
-    while (true) {
-        gpio_set_level((gpio_num_t)CONFIG_BLINK_GPIO, 1);
-        vTaskDelay(500 / portTICK_PERIOD_MS);
-        gpio_set_level((gpio_num_t)CONFIG_BLINK_GPIO, 0);
-        vTaskDelay(500 / portTICK_PERIOD_MS);
-    }
+    esp_timer_create_args_t timer_create_args = {
+        .callback = animate_cb,
+        .arg = NULL,
+        .dispatch_method = ESP_TIMER_TASK,
+        .name = "animate_timer"
+    };
+
+    esp_timer_handle_t timer_h;
+
+    esp_timer_create(&timer_create_args, &timer_h);
+
+    esp_timer_start_periodic(timer_h, 1000000L / 10); // 10hz
+
+    while(1) vTaskDelay(1000 / portTICK_PERIOD_MS);
 }
 
 void app_main(void) {
@@ -220,15 +222,11 @@ void app_main(void) {
 
     mqtt_app_start();
 
-    if(xTaskCreate(blink_task, "blink_task", 1024, NULL, 5, NULL) == pdPASS)
-        ESP_LOGI(TAG, "[APP] Created blink task.");
-    else ESP_LOGE(TAG, "[APP] Unable to create blink task.");
-
-    if(xTaskCreate(animate_task, "animate_task", 8192, NULL, 5, NULL) == pdPASS)
-        ESP_LOGI(TAG, "[APP] Created animate task.");
+    if(xTaskCreate(animate_task, "animate_task", 8192, NULL, 5, NULL) == pdPASS) ESP_LOGI(TAG, "[APP] Created animate task.");
     else ESP_LOGE(TAG, "[APP] Unable to create animate task.");
 
     while (true) {
+    #if 0
         if (ota) {
             esp_http_client_config_t config = {
                 .url = "http://ota.lan/parlor.bin",
@@ -253,6 +251,7 @@ void app_main(void) {
         }
 
         ESP_LOGI(TAG, "Sleeping 5s.");
+        #endif /* 0 */
         vTaskDelay(5000 / portTICK_PERIOD_MS);
     }
 }
